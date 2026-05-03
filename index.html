@@ -13,7 +13,7 @@
     <aside id="sidebar">
       <header>
         <h1>Live Flight Tracker</h1>
-        <p>Interactive aircraft map using OpenSky state vectors.</p>
+        <p>Interactive aircraft map using live public ADS-B data.</p>
       </header>
 
       <section class="panel">
@@ -24,6 +24,7 @@
         <button id="usaBtn">USA view</button>
         <label class="check"><input type="checkbox" id="autoRefresh" checked /> Auto refresh</label>
         <label class="check"><input type="checkbox" id="liveMotion" checked /> Live movement between refreshes</label>
+        <label class="check"><input type="checkbox" id="followSelected" checked /> Follow selected plane</label>
         <label class="check"><input type="checkbox" id="showProjected" checked /> Show projected heading line</label>
         <label class="check"><input type="checkbox" id="showObservedTrail" checked /> Show selected plane trail</label>
         <label class="check"><input type="checkbox" id="showRoute" checked /> Try to show route/path info</label>
@@ -43,9 +44,9 @@
       <section class="panel advanced">
         <details>
           <summary>Advanced API settings</summary>
-          <p class="muted">Direct OpenSky works in many browsers. If GitHub Pages blocks it, paste a proxy URL here, such as a Cloudflare Worker based on <code>cloudflare-worker.js</code>.</p>
+          <p class="muted">Leave this blank for automatic live-data sources. If you deploy your own proxy, paste its base URL here.</p>
           <label>API base URL
-            <input id="apiBase" type="url" placeholder="https://opensky-network.org/api" />
+            <input id="apiBase" type="url" placeholder="Automatic sources" />
           </label>
           <button id="saveApiBtn">Save API setting</button>
         </details>

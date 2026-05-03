@@ -1,6 +1,7 @@
-const DEFAULT_API = "https://opensky-network.org/api";
+const DEFAULT_OPEN_SKY = "https://opensky-network.org/api";
 const LS_API_KEY = "flightTrackerApiBase";
 const EARTH_RADIUS_M = 6371000;
+const MAX_RADIUS_NM = 250;
 
 const state = {
   map: null,
@@ -8,12 +9,11 @@ const state = {
   selectedIcao: null,
   refreshTimer: null,
   animationFrame: null,
-  lastFetchStarted: 0,
-  lastFetchEnded: 0,
   routeLine: null,
   projectedLine: null,
   observedTrailLine: null,
-  apiBase: localStorage.getItem(LS_API_KEY) || DEFAULT_API
+  apiBase: localStorage.getItem(LS_API_KEY) || "",
+  lastGoodSource: ""
 };
 
 const els = {
@@ -35,14 +35,16 @@ const els = {
 };
 
 function init(){
-  state.map = L.map("map", { preferCanvas: true }).setView([31.4, -96.9], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  state.map = L.map("map", { preferCanvas: true, zoomControl: true }).setView([29.7604, -95.3698], 8);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 12,
-    attribution: "&copy; OpenStreetMap contributors | Aircraft data: OpenSky Network"
+    attribution: "&copy; OpenStreetMap contributors | Aircraft data: OpenSky / ADS-B public APIs"
   }).addTo(state.map);
 
   els.apiBase.value = state.apiBase;
   wireEvents();
+  setTimeout(() => state.map.invalidateSize(true), 100);
+  setTimeout(() => state.map.invalidateSize(true), 700);
   fetchVisibleAircraft();
   startAutoRefresh();
   animateAircraft();
@@ -61,25 +63,26 @@ function wireEvents(){
   els.showObservedTrail.addEventListener("change", redrawSelectedOverlays);
   els.showRoute.addEventListener("change", redrawSelectedOverlays);
   els.saveApiBtn.addEventListener("click", () => {
-    const value = els.apiBase.value.trim().replace(/\/$/, "") || DEFAULT_API;
+    const value = els.apiBase.value.trim().replace(/\/$/, "");
     state.apiBase = value;
-    localStorage.setItem(LS_API_KEY, value);
-    setStatus(`Saved API base: ${value}`);
+    if (value) localStorage.setItem(LS_API_KEY, value);
+    else localStorage.removeItem(LS_API_KEY);
+    setStatus(value ? `Saved custom API base: ${value}` : "Cleared custom API base. Using automatic sources.");
     fetchVisibleAircraft();
   });
-  state.map.on("moveend", () => {
-    if (state.map.getZoom() >= 4) fetchVisibleAircraft();
+  state.map.on("moveend zoomend", () => {
+    state.map.invalidateSize(false);
+    if (state.map.getZoom() >= 3) fetchVisibleAircraft();
   });
+  window.addEventListener("resize", () => setTimeout(() => state.map.invalidateSize(true), 100));
 }
 
 function locateUser(){
-  if (!navigator.geolocation){
-    setStatus("Geolocation is not supported in this browser.", true);
-    return;
-  }
-  navigator.geolocation.getCurrentPosition(pos => {
-    state.map.setView([pos.coords.latitude, pos.coords.longitude], 8);
-  }, () => setStatus("Could not get your location.", true));
+  if (!navigator.geolocation){ setStatus("Geolocation is not supported in this browser.", true); return; }
+  navigator.geolocation.getCurrentPosition(
+    pos => state.map.setView([pos.coords.latitude, pos.coords.longitude], 8),
+    () => setStatus("Could not get your location.", true)
+  );
 }
 
 function startAutoRefresh(){
@@ -90,33 +93,106 @@ function startAutoRefresh(){
 }
 
 async function fetchVisibleAircraft(){
+  setStatus("Loading aircraft in visible area...");
+  const candidates = buildSourceCandidates();
+  const errors = [];
+  for (const source of candidates){
+    try{
+      const res = await fetch(source.url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const aircraft = source.parse(data);
+      if (!Array.isArray(aircraft)) throw new Error("unexpected response format");
+      updateAircraft(aircraft, Date.now());
+      state.lastGoodSource = source.label;
+      setStatus(`Loaded ${aircraft.length} aircraft from ${source.label}. Last update: ${new Date().toLocaleTimeString()}`);
+      return;
+    } catch(err){
+      errors.push(`${source.label}: ${err.message}`);
+      console.warn(`${source.label} failed`, err);
+    }
+  }
+  setStatus(`No flight data loaded. ${errors.join(" | ")}`, true);
+}
+
+function buildSourceCandidates(){
   const bounds = state.map.getBounds();
+  const center = bounds.getCenter();
+  const radiusNm = Math.max(25, Math.min(MAX_RADIUS_NM, Math.ceil(distanceNm(center.lat, center.lng, bounds.getNorthEast().lat, bounds.getNorthEast().lng))));
+  const lat = center.lat.toFixed(4);
+  const lon = center.lng.toFixed(4);
   const lamin = bounds.getSouth().toFixed(4);
   const lamax = bounds.getNorth().toFixed(4);
   const lomin = bounds.getWest().toFixed(4);
   const lomax = bounds.getEast().toFixed(4);
-  const url = `${state.apiBase}/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
-  state.lastFetchStarted = Date.now();
-  setStatus("Loading aircraft in visible area...");
-  try{
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const rows = Array.isArray(data.states) ? data.states : [];
-    updateAircraft(rows, data.time ? data.time * 1000 : Date.now());
-    state.lastFetchEnded = Date.now();
-    setStatus(`Loaded ${rows.length} aircraft. Last update: ${new Date().toLocaleTimeString()}`);
-  } catch(err){
-    console.error(err);
-    setStatus(`Could not load aircraft: ${err.message}. Try again later or use a proxy URL.`, true);
+
+  if (state.apiBase){
+    const base = state.apiBase;
+    return [
+      { label: "Custom API / OpenSky format", url: `${base}/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`, parse: parseOpenSkyResponse },
+      { label: "Custom API / ADS-B point format", url: `${base}/v2/point/${lat}/${lon}/${radiusNm}`, parse: parseReadsbResponse },
+      { label: "Custom API / ADS-B lat-lon-dist format", url: `${base}/v2/lat/${lat}/lon/${lon}/dist/${radiusNm}`, parse: parseReadsbResponse }
+    ];
   }
+
+  return [
+    { label: "Airplanes.live", url: `https://api.airplanes.live/v2/point/${lat}/${lon}/${radiusNm}`, parse: parseReadsbResponse },
+    { label: "ADSB.lol", url: `https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${radiusNm}`, parse: parseReadsbResponse },
+    { label: "OpenSky", url: `${DEFAULT_OPEN_SKY}/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`, parse: parseOpenSkyResponse }
+  ];
 }
 
-function updateAircraft(rows, dataTimeMs){
+function parseOpenSkyResponse(data){
+  const rows = Array.isArray(data.states) ? data.states : [];
+  return rows.map(s => ({
+    icao24: safeStr(s[0]),
+    callsign: safeStr(s[1]),
+    originCountry: safeStr(s[2]),
+    lon: num(s[5]),
+    lat: num(s[6]),
+    baroAltitude: num(s[7]),
+    onGround: Boolean(s[8]),
+    velocity: num(s[9]),
+    track: num(s[10]),
+    verticalRate: num(s[11]),
+    geoAltitude: num(s[13]),
+    squawk: safeStr(s[14]),
+    source: "OpenSky"
+  })).filter(validAircraft);
+}
+
+function parseReadsbResponse(data){
+  const rows = Array.isArray(data.ac) ? data.ac : Array.isArray(data.aircraft) ? data.aircraft : [];
+  return rows.map(a => {
+    const gsKt = num(a.gs);
+    return {
+      icao24: safeStr(a.hex || a.icao || a.icao24),
+      callsign: safeStr(a.flight || a.callsign || a.call),
+      originCountry: safeStr(a.country || a.dbFlags || ""),
+      lon: num(a.lon),
+      lat: num(a.lat),
+      baroAltitude: feetToMeters(altValue(a.alt_baro)),
+      geoAltitude: feetToMeters(altValue(a.alt_geom)),
+      onGround: a.alt_baro === "ground" || a.gnd === true,
+      velocity: gsKt != null ? gsKt * 0.514444 : num(a.speed),
+      track: num(a.track ?? a.true_heading ?? a.mag_heading),
+      verticalRate: fpmToMps(num(a.baro_rate ?? a.geom_rate)),
+      squawk: safeStr(a.squawk),
+      registration: safeStr(a.r),
+      aircraftType: safeStr(a.t),
+      source: "readsb"
+    };
+  }).filter(validAircraft);
+}
+
+function altValue(v){ return v === "ground" ? 0 : num(v); }
+function feetToMeters(v){ return v == null ? null : v * 0.3048; }
+function fpmToMps(v){ return v == null ? null : v * 0.00508; }
+function validAircraft(ac){ return ac.icao24 && Number.isFinite(ac.lat) && Number.isFinite(ac.lon); }
+
+function updateAircraft(rows){
   const seen = new Set();
-  for (const row of rows){
-    const ac = parseState(row, dataTimeMs);
-    if (!ac || !Number.isFinite(ac.lat) || !Number.isFinite(ac.lon)) continue;
+  for (const ac of rows){
     seen.add(ac.icao24);
     const existing = state.aircraft.get(ac.icao24);
     if (existing){
@@ -124,7 +200,7 @@ function updateAircraft(rows, dataTimeMs){
       existing.prevLon = existing.displayLon ?? existing.lon;
       Object.assign(existing, ac, { displayLat: ac.lat, displayLon: ac.lon, lastSeenLocal: Date.now() });
       existing.trail.push([ac.lat, ac.lon]);
-      existing.trail = simplifyTrail(existing.trail).slice(-90);
+      existing.trail = simplifyTrail(existing.trail).slice(-120);
       existing.marker.setLatLng([existing.displayLat, existing.displayLon]);
       existing.marker.setIcon(makePlaneIcon(existing.track, state.selectedIcao === ac.icao24));
       existing.marker.setPopupContent(popupHtml(existing));
@@ -142,7 +218,7 @@ function updateAircraft(rows, dataTimeMs){
     }
   }
 
-  const cutoff = Date.now() - 180000;
+  const cutoff = Date.now() - 240000;
   for (const [icao, ac] of state.aircraft.entries()){
     if (!seen.has(icao) && ac.lastSeenLocal < cutoff){
       state.map.removeLayer(ac.marker);
@@ -152,28 +228,6 @@ function updateAircraft(rows, dataTimeMs){
   }
   applyFilter();
   redrawSelectedOverlays();
-}
-
-function parseState(s, dataTimeMs){
-  return {
-    icao24: safeStr(s[0]),
-    callsign: safeStr(s[1]),
-    originCountry: safeStr(s[2]),
-    timePosition: s[3],
-    lastContact: s[4],
-    lon: num(s[5]),
-    lat: num(s[6]),
-    baroAltitude: num(s[7]),
-    onGround: Boolean(s[8]),
-    velocity: num(s[9]),
-    track: num(s[10]),
-    verticalRate: num(s[11]),
-    geoAltitude: num(s[13]),
-    squawk: safeStr(s[14]),
-    spi: Boolean(s[15]),
-    positionSource: s[16],
-    dataTimeMs
-  };
 }
 
 function safeStr(v){ return (v ?? "").toString().trim(); }
@@ -197,7 +251,8 @@ function popupHtml(ac){
   const flightaware = ac.callsign ? `https://flightaware.com/live/flight/${encodeURIComponent(ac.callsign.replace(/\s+/g,""))}` : null;
   return `<strong>${ac.callsign || "Unknown callsign"}</strong> <span class="pill">${ac.icao24}</span><br>
     <div class="info-grid">
-      <strong>Country</strong><span>${ac.originCountry || "—"}</span>
+      <strong>Type</strong><span>${ac.aircraftType || "—"}</span>
+      <strong>Registration</strong><span>${ac.registration || "—"}</span>
       <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"}</span>
       <strong>Speed</strong><span>${speedKt != null ? `${Math.round(speedKt)} kt` : "—"}</span>
       <strong>Heading</strong><span>${ac.track != null ? `${Math.round(ac.track)}°` : "—"}</span>
@@ -233,19 +288,20 @@ function updateSelectedInfo(ac){
   els.selectedInfo.innerHTML = `<div class="info-grid">
     <strong>Callsign</strong><span>${ac.callsign || "—"}</span>
     <strong>ICAO24</strong><span>${ac.icao24}</span>
-    <strong>Country</strong><span>${ac.originCountry || "—"}</span>
+    <strong>Type</strong><span>${ac.aircraftType || "—"}</span>
+    <strong>Registration</strong><span>${ac.registration || "—"}</span>
     <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"}</span>
     <strong>Speed</strong><span>${speedKt != null ? `${Math.round(speedKt)} kt` : "—"}</span>
     <strong>Heading</strong><span>${ac.track != null ? `${Math.round(ac.track)}°` : "—"}</span>
     <strong>Coordinates</strong><span>${(ac.displayLat ?? ac.lat).toFixed(4)}, ${(ac.displayLon ?? ac.lon).toFixed(4)}</span>
   </div>
-  <p class="muted">Observed trail is built from points this app has seen. Planned/established airline routing usually is not included in ADS-B state data, so the app tries OpenSky route estimation and provides a FlightAware lookup when needed.</p>`;
+  <p class="muted">The green line is the trail this app has observed. The blue dashed line is where the aircraft is likely headed in the next few minutes based on current heading and groundspeed. Official flight-plan routing is not always available in public ADS-B data.</p>`;
 }
 
 function applyFilter(){
   const q = els.searchBox.value.trim().toLowerCase();
   for (const ac of state.aircraft.values()){
-    const hay = `${ac.callsign} ${ac.icao24} ${ac.originCountry}`.toLowerCase();
+    const hay = `${ac.callsign} ${ac.icao24} ${ac.originCountry} ${ac.registration} ${ac.aircraftType}`.toLowerCase();
     const show = !q || hay.includes(q);
     if (show && !state.map.hasLayer(ac.marker)) ac.marker.addTo(state.map);
     if (!show && state.map.hasLayer(ac.marker)) state.map.removeLayer(ac.marker);
@@ -274,25 +330,27 @@ function animateAircraft(){
 }
 
 function destinationPoint(lat, lon, bearingDeg, distanceM){
-  const δ = distanceM / EARTH_RADIUS_M;
-  const θ = toRad(bearingDeg);
-  const φ1 = toRad(lat);
-  const λ1 = toRad(lon);
-  const sinφ2 = Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ);
-  const φ2 = Math.asin(sinφ2);
-  const y = Math.sin(θ) * Math.sin(δ) * Math.cos(φ1);
-  const x = Math.cos(δ) - Math.sin(φ1) * sinφ2;
-  const λ2 = λ1 + Math.atan2(y, x);
-  return { lat: toDeg(φ2), lon: ((toDeg(λ2) + 540) % 360) - 180 };
+  const delta = distanceM / EARTH_RADIUS_M;
+  const theta = toRad(bearingDeg);
+  const phi1 = toRad(lat);
+  const lambda1 = toRad(lon);
+  const sinPhi2 = Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta);
+  const phi2 = Math.asin(sinPhi2);
+  const y = Math.sin(theta) * Math.sin(delta) * Math.cos(phi1);
+  const x = Math.cos(delta) - Math.sin(phi1) * sinPhi2;
+  const lambda2 = lambda1 + Math.atan2(y, x);
+  return { lat: toDeg(phi2), lon: ((toDeg(lambda2) + 540) % 360) - 180 };
 }
 function toRad(d){ return d * Math.PI / 180; }
 function toDeg(r){ return r * 180 / Math.PI; }
+function distanceNm(lat1, lon1, lat2, lon2){
+  const p1 = toRad(lat1), p2 = toRad(lat2), dp = toRad(lat2-lat1), dl = toRad(lon2-lon1);
+  const a = Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return (EARTH_RADIUS_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))) / 1852;
+}
 
 function redrawSelectedOverlays(){
-  if (!state.selectedIcao || !state.aircraft.has(state.selectedIcao)){
-    clearOverlays();
-    return;
-  }
+  if (!state.selectedIcao || !state.aircraft.has(state.selectedIcao)){ clearOverlays(); return; }
   const ac = state.aircraft.get(state.selectedIcao);
   redrawObservedTrail(ac);
   redrawProjectedLine(ac);
@@ -300,9 +358,7 @@ function redrawSelectedOverlays(){
 }
 
 function clearOverlays(){
-  for (const layer of [state.routeLine, state.projectedLine, state.observedTrailLine]){
-    if (layer) state.map.removeLayer(layer);
-  }
+  for (const layer of [state.routeLine, state.projectedLine, state.observedTrailLine]) if (layer) state.map.removeLayer(layer);
   state.routeLine = state.projectedLine = state.observedTrailLine = null;
 }
 
@@ -319,9 +375,7 @@ function redrawProjectedLine(ac){
   if (!els.showProjected.checked || ac.track == null || !ac.velocity) return;
   const start = [ac.displayLat ?? ac.lat, ac.displayLon ?? ac.lon];
   const endPt = destinationPoint(start[0], start[1], ac.track, ac.velocity * 600);
-  state.projectedLine = L.polyline([start, [endPt.lat, endPt.lon]], {
-    color: "#4cc9f0", weight: 2, opacity: 0.8, dashArray: "7 7"
-  }).addTo(state.map);
+  state.projectedLine = L.polyline([start, [endPt.lat, endPt.lon]], { color: "#4cc9f0", weight: 2, opacity: 0.8, dashArray: "7 7" }).addTo(state.map);
 }
 
 function redrawRouteLine(ac){
@@ -332,33 +386,25 @@ function redrawRouteLine(ac){
 }
 
 async function loadRouteForSelected(ac){
-  if (!ac.callsign || ac.routeTried) return;
+  if (!ac.icao24 || ac.routeTried) return;
   ac.routeTried = true;
-  const callsign = ac.callsign.replace(/\s+/g, "");
-  const begin = Math.floor(Date.now() / 1000) - 86400;
-  const end = Math.floor(Date.now() / 1000);
-  const trackUrl = `${state.apiBase}/tracks/all?icao24=${encodeURIComponent(ac.icao24)}&time=0`;
-  const routeUrl = `${state.apiBase}/routes?callsign=${encodeURIComponent(callsign)}&begin=${begin}&end=${end}`;
-  try{
-    const trackRes = await fetch(trackUrl, { cache: "no-store" });
-    if (trackRes.ok){
-      const track = await trackRes.json();
-      if (Array.isArray(track.path) && track.path.length > 1){
-        ac.routePoints = track.path.map(p => [p[1], p[2]]).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
-        redrawRouteLine(ac);
+  const sources = [
+    `https://api.adsb.lol/v2/icao/${encodeURIComponent(ac.icao24)}`,
+    `https://api.airplanes.live/v2/hex/${encodeURIComponent(ac.icao24)}`
+  ];
+  for (const url of sources){
+    try{
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const found = parseReadsbResponse(data)[0];
+      if (found && (found.registration || found.aircraftType)){
+        Object.assign(ac, { registration: found.registration || ac.registration, aircraftType: found.aircraftType || ac.aircraftType });
+        updateSelectedInfo(ac);
+        return;
       }
-    }
-  }catch(err){ console.warn("Track lookup failed", err); }
-
-  try{
-    const routeRes = await fetch(routeUrl, { cache: "no-store" });
-    if (routeRes.ok){
-      const route = await routeRes.json();
-      if (route?.route?.length){
-        els.selectedInfo.insertAdjacentHTML("beforeend", `<p class="warn">Estimated route airports: ${route.route.join(" → ")}</p>`);
-      }
-    }
-  }catch(err){ console.warn("Route lookup failed", err); }
+    }catch(err){ console.warn("Aircraft detail lookup failed", err); }
+  }
 }
 
 function simplifyTrail(points){
@@ -372,7 +418,7 @@ function simplifyTrail(points){
 
 function setStatus(msg, isError = false){
   els.status.textContent = msg;
-  els.status.className = isError ? "warn" : "";
+  els.status.className = isError ? "bad" : "";
 }
 
 window.addEventListener("load", init);

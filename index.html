@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Flight Tracker</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQuxUxJxzT2MeiqVxpi6vGvbHvZ9UqU=" crossorigin="" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <header>
+        <h1>Live Flight Tracker</h1>
+        <p>Interactive aircraft map using OpenSky state vectors.</p>
+      </header>
+
+      <section class="panel">
+        <h2>Controls</h2>
+        <button id="refreshBtn">Refresh visible area</button>
+        <button id="locateBtn">Use my location</button>
+        <button id="houstonBtn">Houston</button>
+        <button id="usaBtn">USA view</button>
+        <label class="check"><input type="checkbox" id="autoRefresh" checked /> Auto refresh</label>
+        <label class="check"><input type="checkbox" id="liveMotion" checked /> Live movement between refreshes</label>
+        <label class="check"><input type="checkbox" id="showProjected" checked /> Show projected heading line</label>
+        <label class="check"><input type="checkbox" id="showObservedTrail" checked /> Show selected plane trail</label>
+        <label class="check"><input type="checkbox" id="showRoute" checked /> Try to show route/path info</label>
+        <label>Refresh seconds
+          <input id="refreshSeconds" type="number" min="10" max="120" step="5" value="20" />
+        </label>
+        <label>Search callsign / ICAO / country
+          <input id="searchBox" type="search" placeholder="Example: AAL, DAL, N123" />
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>Selected Aircraft</h2>
+        <div id="selectedInfo" class="muted">Click a plane to see details.</div>
+      </section>
+
+      <section class="panel advanced">
+        <details>
+          <summary>Advanced API settings</summary>
+          <p class="muted">Direct OpenSky works in many browsers. If GitHub Pages blocks it, paste a proxy URL here, such as a Cloudflare Worker based on <code>cloudflare-worker.js</code>.</p>
+          <label>API base URL
+            <input id="apiBase" type="url" placeholder="https://opensky-network.org/api" />
+          </label>
+          <button id="saveApiBtn">Save API setting</button>
+        </details>
+      </section>
+
+      <footer>
+        <div id="status">Ready.</div>
+        <small>Data may be delayed, incomplete, or rate-limited. Not for navigation.</small>
+      </footer>
+    </aside>
+    <main id="map"></main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

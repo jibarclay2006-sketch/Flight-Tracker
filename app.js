@@ -2,6 +2,7 @@ const DEFAULT_OPEN_SKY = "https://opensky-network.org/api";
 const LS_API_KEY = "flightTrackerApiBase";
 const EARTH_RADIUS_M = 6371000;
 const MAX_RADIUS_NM = 250;
+const FOLLOW_PAN_MS = 900;
 
 const state = {
   map: null,
@@ -13,7 +14,9 @@ const state = {
   projectedLine: null,
   observedTrailLine: null,
   apiBase: localStorage.getItem(LS_API_KEY) || "",
-  lastGoodSource: ""
+  lastGoodSource: "",
+  lastFollowPan: 0,
+  suppressMoveFetchUntil: 0
 };
 
 const els = {
@@ -23,6 +26,7 @@ const els = {
   usaBtn: document.getElementById("usaBtn"),
   autoRefresh: document.getElementById("autoRefresh"),
   liveMotion: document.getElementById("liveMotion"),
+  followSelected: document.getElementById("followSelected"),
   showProjected: document.getElementById("showProjected"),
   showObservedTrail: document.getElementById("showObservedTrail"),
   showRoute: document.getElementById("showRoute"),
@@ -59,6 +63,7 @@ function wireEvents(){
   els.refreshSeconds.addEventListener("change", startAutoRefresh);
   els.searchBox.addEventListener("input", applyFilter);
   els.liveMotion.addEventListener("change", redrawSelectedOverlays);
+  els.followSelected.addEventListener("change", () => followSelectedPlane(true));
   els.showProjected.addEventListener("change", redrawSelectedOverlays);
   els.showObservedTrail.addEventListener("change", redrawSelectedOverlays);
   els.showRoute.addEventListener("change", redrawSelectedOverlays);
@@ -72,7 +77,11 @@ function wireEvents(){
   });
   state.map.on("moveend zoomend", () => {
     state.map.invalidateSize(false);
+    if (Date.now() < state.suppressMoveFetchUntil) return;
     if (state.map.getZoom() >= 3) fetchVisibleAircraft();
+  });
+  state.map.on("dragstart", () => {
+    if (els.followSelected) els.followSelected.checked = false;
   });
   window.addEventListener("resize", () => setTimeout(() => state.map.invalidateSize(true), 100));
 }
@@ -103,9 +112,10 @@ async function fetchVisibleAircraft(){
       const data = await res.json();
       const aircraft = source.parse(data);
       if (!Array.isArray(aircraft)) throw new Error("unexpected response format");
-      updateAircraft(aircraft, Date.now());
+      updateAircraft(aircraft);
       state.lastGoodSource = source.label;
       setStatus(`Loaded ${aircraft.length} aircraft from ${source.label}. Last update: ${new Date().toLocaleTimeString()}`);
+      followSelectedPlane(false);
       return;
     } catch(err){
       errors.push(`${source.label}: ${err.message}`);
@@ -273,6 +283,7 @@ function selectAircraft(icao){
   ac.marker.setIcon(makePlaneIcon(ac.track, true));
   updateSelectedInfo(ac);
   redrawSelectedOverlays();
+  followSelectedPlane(true);
   if (els.showRoute.checked) loadRouteForSelected(ac);
 }
 
@@ -285,6 +296,7 @@ function clearSelection(){
 function updateSelectedInfo(ac){
   const alt = ac.geoAltitude ?? ac.baroAltitude;
   const speedKt = ac.velocity != null ? ac.velocity * 1.94384 : null;
+  const followText = els.followSelected?.checked ? "Following" : "Not following";
   els.selectedInfo.innerHTML = `<div class="info-grid">
     <strong>Callsign</strong><span>${ac.callsign || "—"}</span>
     <strong>ICAO24</strong><span>${ac.icao24}</span>
@@ -294,8 +306,9 @@ function updateSelectedInfo(ac){
     <strong>Speed</strong><span>${speedKt != null ? `${Math.round(speedKt)} kt` : "—"}</span>
     <strong>Heading</strong><span>${ac.track != null ? `${Math.round(ac.track)}°` : "—"}</span>
     <strong>Coordinates</strong><span>${(ac.displayLat ?? ac.lat).toFixed(4)}, ${(ac.displayLon ?? ac.lon).toFixed(4)}</span>
+    <strong>Map</strong><span>${followText}</span>
   </div>
-  <p class="muted">The green line is the trail this app has observed. The blue dashed line is where the aircraft is likely headed in the next few minutes based on current heading and groundspeed. Official flight-plan routing is not always available in public ADS-B data.</p>`;
+  <p class="muted">The green line is the trail this app has observed. The blue dashed line is where the aircraft is likely headed in the next few minutes based on current heading and groundspeed.</p>`;
 }
 
 function applyFilter(){
@@ -324,9 +337,23 @@ function animateAircraft(){
       const ac = state.aircraft.get(state.selectedIcao);
       updateSelectedInfo(ac);
       redrawProjectedLine(ac);
+      followSelectedPlane(false);
     }
   }
   state.animationFrame = requestAnimationFrame(animateAircraft);
+}
+
+function followSelectedPlane(force = false){
+  if (!els.followSelected?.checked || !state.selectedIcao || !state.aircraft.has(state.selectedIcao)) return;
+  const ac = state.aircraft.get(state.selectedIcao);
+  const lat = ac.displayLat ?? ac.lat;
+  const lon = ac.displayLon ?? ac.lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  const now = Date.now();
+  if (!force && now - state.lastFollowPan < FOLLOW_PAN_MS) return;
+  state.lastFollowPan = now;
+  state.suppressMoveFetchUntil = now + 1300;
+  state.map.panTo([lat, lon], { animate: true, duration: 0.45, easeLinearity: 0.25, noMoveStart: true });
 }
 
 function destinationPoint(lat, lon, bearingDeg, distanceM){

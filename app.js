@@ -16,6 +16,7 @@ const state = {
   apiBase: localStorage.getItem(LS_API_KEY) || "",
   lastGoodSource: "",
   lastFollowPan: 0,
+  lastTrailDraw: 0,
   suppressMoveFetchUntil: 0
 };
 
@@ -105,6 +106,7 @@ async function fetchVisibleAircraft(){
   setStatus("Loading aircraft in visible area...");
   const candidates = buildSourceCandidates();
   const errors = [];
+
   for (const source of candidates){
     try{
       const res = await fetch(source.url, { cache: "no-store" });
@@ -122,6 +124,7 @@ async function fetchVisibleAircraft(){
       console.warn(`${source.label} failed`, err);
     }
   }
+
   setStatus(`No flight data loaded. ${errors.join(" | ")}`, true);
 }
 
@@ -205,14 +208,15 @@ function updateAircraft(rows){
   for (const ac of rows){
     seen.add(ac.icao24);
     const existing = state.aircraft.get(ac.icao24);
+
     if (existing){
       existing.prevLat = existing.displayLat ?? existing.lat;
       existing.prevLon = existing.displayLon ?? existing.lon;
       Object.assign(existing, ac, { displayLat: ac.lat, displayLon: ac.lon, lastSeenLocal: Date.now() });
       existing.trail.push([ac.lat, ac.lon]);
-      existing.trail = simplifyTrail(existing.trail).slice(-120);
+      existing.trail = simplifyTrail(existing.trail).slice(-140);
       existing.marker.setLatLng([existing.displayLat, existing.displayLon]);
-      existing.marker.setIcon(makePlaneIcon(existing.track, state.selectedIcao === ac.icao24));
+      existing.marker.setIcon(makePlaneIcon(existing.track, state.selectedIcao === existing.icao24, existing));
       existing.marker.setPopupContent(popupHtml(existing));
     } else {
       ac.displayLat = ac.lat;
@@ -220,7 +224,7 @@ function updateAircraft(rows){
       ac.lastSeenLocal = Date.now();
       ac.trail = [[ac.lat, ac.lon]];
       ac.routeTried = false;
-      ac.marker = L.marker([ac.lat, ac.lon], { icon: makePlaneIcon(ac.track, false), title: ac.callsign || ac.icao24 })
+      ac.marker = L.marker([ac.lat, ac.lon], { icon: makePlaneIcon(ac.track, false, ac), title: ac.callsign || ac.icao24 })
         .addTo(state.map)
         .bindPopup(popupHtml(ac));
       ac.marker.on("click", () => selectAircraft(ac.icao24));
@@ -244,26 +248,61 @@ function safeStr(v){ return (v ?? "").toString().trim(); }
 function num(v){ const n = Number(v); return Number.isFinite(n) ? n : null; }
 function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
 
-function makePlaneIcon(track = 0, active = false){
+function altitudeMeters(ac){
+  const alt = ac?.geoAltitude ?? ac?.baroAltitude;
+  return Number.isFinite(alt) ? alt : null;
+}
+
+function altitudeColor(ac){
+  if (ac?.onGround) return "#9fb3cf";
+  const alt = altitudeMeters(ac);
+  if (alt == null) return "#4cc9f0";
+  if (alt < 1000) return "#80ed99";
+  if (alt < 3000) return "#4cc9f0";
+  if (alt < 6000) return "#ffd166";
+  if (alt < 9000) return "#ff9f1c";
+  if (alt < 12000) return "#ff6b6b";
+  return "#c77dff";
+}
+
+function altitudeBand(ac){
+  if (ac?.onGround) return "ground";
+  const alt = altitudeMeters(ac);
+  if (alt == null) return "unknown altitude";
+  if (alt < 1000) return "low";
+  if (alt < 3000) return "low-mid";
+  if (alt < 6000) return "mid";
+  if (alt < 9000) return "high";
+  if (alt < 12000) return "very high";
+  return "cruise/highest";
+}
+
+function makePlaneIcon(track = 0, active = false, ac = null){
   const heading = Number.isFinite(track) ? track : 0;
+  const fill = altitudeColor(ac);
+  const stroke = active ? "#fff7c2" : "#06101d";
+  const strokeWidth = active ? 4.4 : 3;
   const cls = active ? "plane-icon plane-active" : "plane-icon";
+  const activeRing = active ? `<circle cx="32" cy="32" r="29" fill="none" stroke="#ffd166" stroke-width="3" opacity="0.7"/>` : "";
   const svg = `<div class="${cls}" style="transform: rotate(${heading}deg)">
-    <svg viewBox="0 0 64 64" width="28" height="28" aria-hidden="true">
-      <path fill="#4cc9f0" stroke="#06101d" stroke-width="3" d="M32 3c2.2 0 4 1.8 4 4v19l19 12c1 .7 1.6 1.8 1.6 3v5.2L36 40v13l7 5v3L32 58l-11 3v-3l7-5V40L7.4 46.2V41c0-1.2.6-2.3 1.6-3l19-12V7c0-2.2 1.8-4 4-4z"/>
+    <svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
+      ${activeRing}
+      <path fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" d="M32 3c2.2 0 4 1.8 4 4v19l19 12c1 .7 1.6 1.8 1.6 3v5.2L36 40v13l7 5v3L32 58l-11 3v-3l7-5V40L7.4 46.2V41c0-1.2.6-2.3 1.6-3l19-12V7c0-2.2 1.8-4 4-4z"/>
     </svg>
   </div>`;
-  return L.divIcon({ html: svg, className: "", iconSize: [28,28], iconAnchor: [14,14], popupAnchor: [0,-14] });
+  return L.divIcon({ html: svg, className: "", iconSize: [30,30], iconAnchor: [15,15], popupAnchor: [0,-15] });
 }
 
 function popupHtml(ac){
-  const alt = ac.geoAltitude ?? ac.baroAltitude;
+  const alt = altitudeMeters(ac);
   const speedKt = ac.velocity != null ? ac.velocity * 1.94384 : null;
   const flightaware = ac.callsign ? `https://flightaware.com/live/flight/${encodeURIComponent(ac.callsign.replace(/\s+/g,""))}` : null;
   return `<strong>${ac.callsign || "Unknown callsign"}</strong> <span class="pill">${ac.icao24}</span><br>
     <div class="info-grid">
       <strong>Type</strong><span>${ac.aircraftType || "—"}</span>
       <strong>Registration</strong><span>${ac.registration || "—"}</span>
-      <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"}</span>
+      <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"} <span class="alt-dot" style="background:${altitudeColor(ac)}"></span></span>
+      <strong>Band</strong><span>${altitudeBand(ac)}</span>
       <strong>Speed</strong><span>${speedKt != null ? `${Math.round(speedKt)} kt` : "—"}</span>
       <strong>Heading</strong><span>${ac.track != null ? `${Math.round(ac.track)}°` : "—"}</span>
       <strong>Vertical rate</strong><span>${ac.verticalRate != null ? `${Math.round(ac.verticalRate)} m/s` : "—"}</span>
@@ -275,12 +314,12 @@ function popupHtml(ac){
 function selectAircraft(icao){
   if (state.selectedIcao && state.aircraft.has(state.selectedIcao)){
     const old = state.aircraft.get(state.selectedIcao);
-    old.marker.setIcon(makePlaneIcon(old.track, false));
+    old.marker.setIcon(makePlaneIcon(old.track, false, old));
   }
   state.selectedIcao = icao;
   const ac = state.aircraft.get(icao);
   if (!ac) return;
-  ac.marker.setIcon(makePlaneIcon(ac.track, true));
+  ac.marker.setIcon(makePlaneIcon(ac.track, true, ac));
   updateSelectedInfo(ac);
   redrawSelectedOverlays();
   followSelectedPlane(true);
@@ -294,7 +333,7 @@ function clearSelection(){
 }
 
 function updateSelectedInfo(ac){
-  const alt = ac.geoAltitude ?? ac.baroAltitude;
+  const alt = altitudeMeters(ac);
   const speedKt = ac.velocity != null ? ac.velocity * 1.94384 : null;
   const followText = els.followSelected?.checked ? "Following" : "Not following";
   els.selectedInfo.innerHTML = `<div class="info-grid">
@@ -302,13 +341,22 @@ function updateSelectedInfo(ac){
     <strong>ICAO24</strong><span>${ac.icao24}</span>
     <strong>Type</strong><span>${ac.aircraftType || "—"}</span>
     <strong>Registration</strong><span>${ac.registration || "—"}</span>
-    <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"}</span>
+    <strong>Altitude</strong><span>${alt != null ? `${Math.round(alt).toLocaleString()} m` : "—"} <span class="alt-dot" style="background:${altitudeColor(ac)}"></span></span>
+    <strong>Band</strong><span>${altitudeBand(ac)}</span>
     <strong>Speed</strong><span>${speedKt != null ? `${Math.round(speedKt)} kt` : "—"}</span>
     <strong>Heading</strong><span>${ac.track != null ? `${Math.round(ac.track)}°` : "—"}</span>
     <strong>Coordinates</strong><span>${(ac.displayLat ?? ac.lat).toFixed(4)}, ${(ac.displayLon ?? ac.lon).toFixed(4)}</span>
     <strong>Map</strong><span>${followText}</span>
   </div>
-  <p class="muted">The green line is the trail this app has observed. The blue dashed line is where the aircraft is likely headed in the next few minutes based on current heading and groundspeed.</p>`;
+  <div class="altitude-legend">
+    <span><i style="background:#80ed99"></i>&lt;1 km</span>
+    <span><i style="background:#4cc9f0"></i>1–3 km</span>
+    <span><i style="background:#ffd166"></i>3–6 km</span>
+    <span><i style="background:#ff9f1c"></i>6–9 km</span>
+    <span><i style="background:#ff6b6b"></i>9–12 km</span>
+    <span><i style="background:#c77dff"></i>12+ km</span>
+  </div>
+  <p class="muted">Plane color shows altitude. The bright green trail is the selected aircraft path this app has observed, with a live segment to the current estimated position.</p>`;
 }
 
 function applyFilter(){
@@ -322,8 +370,8 @@ function applyFilter(){
 }
 
 function animateAircraft(){
+  const now = Date.now();
   if (els.liveMotion.checked){
-    const now = Date.now();
     for (const ac of state.aircraft.values()){
       if (!ac.onGround && ac.velocity && ac.track != null){
         const elapsed = clamp((now - ac.lastSeenLocal) / 1000, 0, 45);
@@ -333,13 +381,19 @@ function animateAircraft(){
         ac.marker.setLatLng([ac.displayLat, ac.displayLon]);
       }
     }
-    if (state.selectedIcao && state.aircraft.has(state.selectedIcao)){
-      const ac = state.aircraft.get(state.selectedIcao);
-      updateSelectedInfo(ac);
-      redrawProjectedLine(ac);
-      followSelectedPlane(false);
-    }
   }
+
+  if (state.selectedIcao && state.aircraft.has(state.selectedIcao)){
+    const ac = state.aircraft.get(state.selectedIcao);
+    updateSelectedInfo(ac);
+    redrawProjectedLine(ac);
+    if (now - state.lastTrailDraw > 450) {
+      redrawObservedTrail(ac);
+      state.lastTrailDraw = now;
+    }
+    followSelectedPlane(false);
+  }
+
   state.animationFrame = requestAnimationFrame(animateAircraft);
 }
 
@@ -389,11 +443,33 @@ function clearOverlays(){
   state.routeLine = state.projectedLine = state.observedTrailLine = null;
 }
 
+function selectedTrailPoints(ac){
+  const points = [...(ac.trail || [])];
+  const live = [ac.displayLat ?? ac.lat, ac.displayLon ?? ac.lon];
+  const last = points[points.length - 1];
+  if (Number.isFinite(live[0]) && Number.isFinite(live[1]) && (!last || Math.abs(last[0] - live[0]) > 0.00005 || Math.abs(last[1] - live[1]) > 0.00005)) {
+    points.push(live);
+  }
+  return points;
+}
+
 function redrawObservedTrail(ac){
   if (state.observedTrailLine) state.map.removeLayer(state.observedTrailLine);
   state.observedTrailLine = null;
-  if (!els.showObservedTrail.checked || !ac.trail || ac.trail.length < 2) return;
-  state.observedTrailLine = L.polyline(ac.trail, { color: "#80ed99", weight: 3, opacity: 0.85 }).addTo(state.map);
+  const points = selectedTrailPoints(ac);
+  if (!els.showObservedTrail.checked || points.length < 2) return;
+
+  const halo = L.polyline(points, { color: "#02101b", weight: 13, opacity: 0.92, lineCap: "round", lineJoin: "round" });
+  const glow = L.polyline(points, { color: "#3cffc4", weight: 8, opacity: 0.38, lineCap: "round", lineJoin: "round" });
+  const core = L.polyline(points, { color: "#80ed99", weight: 4.5, opacity: 1, lineCap: "round", lineJoin: "round" });
+  const current = L.circleMarker(points[points.length - 1], {
+    radius: 5,
+    color: "#eafff7",
+    weight: 2,
+    fillColor: "#80ed99",
+    fillOpacity: 1
+  });
+  state.observedTrailLine = L.layerGroup([halo, glow, core, current]).addTo(state.map);
 }
 
 function redrawProjectedLine(ac){
@@ -402,14 +478,14 @@ function redrawProjectedLine(ac){
   if (!els.showProjected.checked || ac.track == null || !ac.velocity) return;
   const start = [ac.displayLat ?? ac.lat, ac.displayLon ?? ac.lon];
   const endPt = destinationPoint(start[0], start[1], ac.track, ac.velocity * 600);
-  state.projectedLine = L.polyline([start, [endPt.lat, endPt.lon]], { color: "#4cc9f0", weight: 2, opacity: 0.8, dashArray: "7 7" }).addTo(state.map);
+  state.projectedLine = L.polyline([start, [endPt.lat, endPt.lon]], { color: "#4cc9f0", weight: 3, opacity: 0.9, dashArray: "7 7" }).addTo(state.map);
 }
 
 function redrawRouteLine(ac){
   if (state.routeLine) state.map.removeLayer(state.routeLine);
   state.routeLine = null;
   if (!els.showRoute.checked || !ac.routePoints || ac.routePoints.length < 2) return;
-  state.routeLine = L.polyline(ac.routePoints, { color: "#ffd166", weight: 3, opacity: 0.85, dashArray: "10 8" }).addTo(state.map);
+  state.routeLine = L.polyline(ac.routePoints, { color: "#ffd166", weight: 3.5, opacity: 0.9, dashArray: "10 8" }).addTo(state.map);
 }
 
 async function loadRouteForSelected(ac){

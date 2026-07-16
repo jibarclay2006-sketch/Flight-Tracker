@@ -1,31 +1,43 @@
-// Optional proxy for GitHub Pages if direct OpenSky browser requests are blocked.
-// Deploy this as a Cloudflare Worker, then paste the Worker URL into Advanced API settings.
+// Optional OpenSky proxy for hosts where direct browser requests are blocked by CORS.
+// Deploy as a Cloudflare Worker, then paste its URL into Tracker settings -> Advanced data settings.
 
 const OPEN_SKY_BASE = "https://opensky-network.org/api";
+const ALLOWED_PATHS = new Set(["/states/all", "/tracks/all"]);
 
 export default {
   async fetch(request) {
-    const url = new URL(request.url);
-    const target = new URL(OPEN_SKY_BASE + url.pathname + url.search);
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+    if (request.method !== "GET") {
+      return new Response("Method not allowed", { status: 405, headers: corsHeaders() });
+    }
 
-    if (!["/states/all", "/tracks/all", "/routes"].includes(url.pathname)) {
+    const url = new URL(request.url);
+    if (!ALLOWED_PATHS.has(url.pathname)) {
       return new Response("Not found", { status: 404, headers: corsHeaders() });
     }
 
-    const response = await fetch(target.toString(), {
-      method: "GET",
-      headers: { "Accept": "application/json" }
-    });
-
-    const body = await response.text();
-    return new Response(body, {
-      status: response.status,
-      headers: {
-        ...corsHeaders(),
-        "Content-Type": response.headers.get("Content-Type") || "application/json",
-        "Cache-Control": "no-store"
-      }
-    });
+    const target = new URL(`${OPEN_SKY_BASE}${url.pathname}${url.search}`);
+    try {
+      const response = await fetch(target, {
+        headers: { Accept: "application/json" }
+      });
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          ...corsHeaders(),
+          "Content-Type": response.headers.get("Content-Type") || "application/json; charset=utf-8",
+          "Cache-Control": "public, max-age=5",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
+    } catch {
+      return new Response(JSON.stringify({ error: "OpenSky is temporarily unavailable" }), {
+        status: 502,
+        headers: { ...corsHeaders(), "Content-Type": "application/json; charset=utf-8" }
+      });
+    }
   }
 };
 
@@ -33,6 +45,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    "Access-Control-Allow-Headers": "Accept, Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400"
   };
 }

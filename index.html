@@ -2,75 +2,232 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Live Flight Tracker</title>
-  <link rel="preconnect" href="https://unpkg.com" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="styles.css?v=6" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07111f" />
+  <meta name="description" content="Explore live aircraft positions, altitude, speed, heading, and observed flight paths on an interactive ADS-B map." />
+  <title>Flight Tracker — Live ADS-B Radar</title>
+  <link rel="preconnect" href="https://basemaps.cartocdn.com" />
+  <link rel="stylesheet" href="vendor/leaflet.css?v=1.9.4" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <div id="app">
-    <aside id="sidebar">
-      <header>
-        <h1>Live Flight Tracker</h1>
-        <p>Interactive aircraft map using live public ADS-B data.</p>
-      </header>
+    <header class="topbar">
+      <div class="brand-wrap">
+        <button id="sidebarToggle" class="icon-button menu-button" type="button" aria-label="Toggle aircraft panel" aria-controls="sidebar" aria-expanded="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>
+        </button>
+        <a class="brand" href="./" aria-label="Flight Tracker home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32"><path d="M16 3.5c1.2 0 2.2 1 2.2 2.2v7.5l8.2 5.1c.8.5 1.3 1.4 1.3 2.4v2.5l-9.5-2.8v5.2l3.3 2.2v1.7L16 28l-5.5 1.5v-1.7l3.3-2.2v-5.2l-9.5 2.8v-2.5c0-1 .5-1.9 1.3-2.4l8.2-5.1V5.7c0-1.2 1-2.2 2.2-2.2Z" /></svg>
+          </span>
+          <span><strong>Flight Tracker</strong><small>LIVE ADS-B RADAR</small></span>
+        </a>
+      </div>
 
-      <section class="panel">
-        <h2>Controls</h2>
-        <button id="refreshBtn">Refresh visible area</button>
-        <button id="locateBtn">Use my location</button>
-        <button id="houstonBtn">Houston</button>
-        <button id="usaBtn">USA view</button>
-        <label class="check"><input type="checkbox" id="autoRefresh" checked /> Auto refresh</label>
-        <label class="check"><input type="checkbox" id="liveMotion" checked /> Live movement between refreshes</label>
-        <label class="check"><input type="checkbox" id="followSelected" checked /> Follow selected plane</label>
-        <label class="check"><input type="checkbox" id="showProjected" checked /> Show projected heading line</label>
-        <label class="check"><input type="checkbox" id="showObservedTrail" checked /> Show selected plane trail</label>
-        <label class="check"><input type="checkbox" id="showRoute" checked /> Try to show route/path info</label>
-        <label>Refresh seconds
-          <input id="refreshSeconds" type="number" min="10" max="120" step="5" value="20" />
-        </label>
-        <label>Search callsign / ICAO / country
-          <input id="searchBox" type="search" placeholder="Example: AAL, DAL, N123" />
-        </label>
-      </section>
+      <div class="global-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+        <label class="sr-only" for="searchBox">Search aircraft</label>
+        <input id="searchBox" type="search" autocomplete="off" spellcheck="false" placeholder="Search callsign, registration, ICAO, type, or country" />
+        <kbd>/</kbd>
+        <button id="clearSearchBtn" type="button" aria-label="Clear search" hidden>×</button>
+      </div>
 
-      <section class="panel altitude-legend">
-        <h2>Altitude Colors</h2>
-        <div class="legend-row"><span style="background:#9aa4b2"></span><p>Ground</p></div>
-        <div class="legend-row"><span style="background:#70e000"></span><p>Below 10,000 ft</p></div>
-        <div class="legend-row"><span style="background:#4cc9f0"></span><p>10,000–20,000 ft</p></div>
-        <div class="legend-row"><span style="background:#4361ee"></span><p>20,000–30,000 ft</p></div>
-        <div class="legend-row"><span style="background:#b517ff"></span><p>30,000–40,000 ft</p></div>
-        <div class="legend-row"><span style="background:#ff9f1c"></span><p>Above 40,000 ft</p></div>
-      </section>
+      <div class="topbar-actions">
+        <div id="dataHealth" class="data-health" data-state="loading" title="Live data connection status">
+          <span class="health-dot"></span>
+          <span id="dataHealthLabel">Connecting</span>
+        </div>
+        <button id="locateBtn" class="icon-button" type="button" aria-label="Use my location" title="Use my location">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><circle cx="12" cy="12" r="7" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /></svg>
+        </button>
+        <button id="refreshBtn" class="icon-button" type="button" aria-label="Refresh live aircraft" title="Refresh live aircraft (R)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8.2A7 7 0 0 1 18.6 7M5.4 17A7 7 0 0 0 17.9 15.8" /></svg>
+        </button>
+        <button id="settingsBtn" class="icon-button" type="button" aria-label="Open settings" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></svg>
+        </button>
+      </div>
+    </header>
 
-      <section class="panel">
-        <h2>Selected Aircraft</h2>
-        <div id="selectedInfo" class="muted">Click a plane to see details.</div>
-      </section>
+    <div class="workspace">
+      <aside id="sidebar" aria-label="Aircraft explorer">
+        <div class="mobile-sheet-handle" aria-hidden="true"></div>
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">Airspace overview</p>
+            <h1>Aircraft nearby</h1>
+          </div>
+          <button id="closeSidebarBtn" class="icon-button sidebar-close" type="button" aria-label="Close aircraft panel">×</button>
+        </div>
 
-      <section class="panel advanced">
-        <details>
-          <summary>Advanced API settings</summary>
-          <p class="muted">Leave this blank for automatic live-data sources. If you deploy your own proxy, paste its base URL here.</p>
-          <label>API base URL
-            <input id="apiBase" type="url" placeholder="Automatic sources" />
-          </label>
-          <button id="saveApiBtn">Save API setting</button>
+        <section class="stats-grid" aria-label="Visible aircraft statistics">
+          <div class="stat-card primary"><span id="totalCount">0</span><small>Visible</small></div>
+          <div class="stat-card"><span id="airborneCount">0</span><small>Airborne</small></div>
+          <div class="stat-card"><span id="groundCount">0</span><small>Ground</small></div>
+          <div class="stat-card alert-stat"><span id="alertCount">0</span><small>Alerts</small></div>
+        </section>
+
+        <section class="filters" aria-label="Aircraft filters">
+          <div class="filter-row" role="group" aria-label="Flight status">
+            <button class="filter-chip active" type="button" data-filter="all" aria-pressed="true">All</button>
+            <button class="filter-chip" type="button" data-filter="airborne" aria-pressed="false">Airborne</button>
+            <button class="filter-chip" type="button" data-filter="ground" aria-pressed="false">Ground</button>
+            <button class="filter-chip" type="button" data-filter="alerts" aria-pressed="false">Alerts</button>
+          </div>
+          <div class="select-row">
+            <label for="altitudeFilter">Altitude
+              <select id="altitudeFilter">
+                <option value="all">Any altitude</option>
+                <option value="low">Below 10,000 ft</option>
+                <option value="mid">10,000–30,000 ft</option>
+                <option value="high">Above 30,000 ft</option>
+              </select>
+            </label>
+            <label for="sortFlights">Sort
+              <select id="sortFlights">
+                <option value="distance">Nearest first</option>
+                <option value="altitude">Highest first</option>
+                <option value="speed">Fastest first</option>
+                <option value="callsign">Callsign A–Z</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section id="selectedPanel" class="selected-panel" aria-live="polite" hidden>
+          <div class="section-title">
+            <span>Selected aircraft</span>
+            <button id="clearSelectionBtn" class="text-button" type="button">Clear</button>
+          </div>
+          <div id="selectedInfo"></div>
+        </section>
+
+        <section class="flight-list-section">
+          <div class="section-title">
+            <span>Flights in view</span>
+            <span id="visibleCount" class="count-badge">0</span>
+          </div>
+          <div id="flightList" class="flight-list" aria-live="polite">
+            <div class="list-skeleton" aria-label="Loading aircraft">
+              <i></i><i></i><i></i>
+            </div>
+          </div>
+        </section>
+
+        <footer class="status-card">
+          <div class="status-line">
+            <span id="statusIndicator" class="status-indicator"></span>
+            <div>
+              <p id="status">Connecting to live flight data…</p>
+              <small id="sourceMeta">Trying available public data sources</small>
+            </div>
+          </div>
+          <button id="retryBtn" class="retry-button" type="button" hidden>Try again</button>
+          <small class="disclaimer">Public ADS-B data may be delayed or incomplete. Not for navigation.</small>
+        </footer>
+      </aside>
+
+      <main id="mapShell">
+        <div id="map" aria-label="Interactive live aircraft map"></div>
+
+        <nav class="place-picker" aria-label="Quick map locations">
+          <button type="button" data-place="east-texas">East Texas</button>
+          <button type="button" data-place="houston">Houston</button>
+          <button type="button" data-place="dallas">Dallas</button>
+          <button type="button" data-place="usa">USA</button>
+        </nav>
+
+        <div class="map-actions">
+          <button id="labelsBtn" class="map-action" type="button" aria-pressed="false" title="Toggle aircraft labels">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4V5Z" /><path d="M8 9h8M8 13h5" /></svg><span>Labels</span>
+          </button>
+          <button id="mapStyleBtn" class="map-action" type="button" title="Switch map style">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z" /><path d="M9 3v15M15 6v15" /></svg><span>Map</span>
+          </button>
+          <button id="fullscreenBtn" class="map-action" type="button" title="Toggle fullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /></svg><span>Full</span>
+          </button>
+        </div>
+
+        <div id="coverageBadge" class="coverage-badge" hidden>
+          <span></span><p><strong>250 nm live coverage</strong><small>Zoom in or move the map to scan another area</small></p>
+        </div>
+
+        <details class="altitude-legend">
+          <summary>Altitude colors</summary>
+          <div class="legend-content">
+            <span><i style="--legend:#94a3b8"></i>Ground</span>
+            <span><i style="--legend:#4ade80"></i>&lt;10k ft</span>
+            <span><i style="--legend:#38bdf8"></i>10–20k</span>
+            <span><i style="--legend:#818cf8"></i>20–30k</span>
+            <span><i style="--legend:#c084fc"></i>30–40k</span>
+            <span><i style="--legend:#fb923c"></i>40k+ ft</span>
+          </div>
         </details>
-      </section>
 
-      <footer>
-        <div id="status">Ready.</div>
-        <small>Data may be delayed, incomplete, or rate-limited. Not for navigation.</small>
-      </footer>
-    </aside>
-    <main id="map"></main>
+        <button id="mobileFlightsBtn" class="mobile-flights-button" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+          <span><strong id="mobileFlightCount">0</strong> aircraft</span>
+        </button>
+
+        <div id="mapMessage" class="map-message" hidden></div>
+      </main>
+    </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="app.js?v=6"></script>
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Personalize your radar</p><h2>Tracker settings</h2></div>
+        <button class="icon-button" value="cancel" aria-label="Close settings">×</button>
+      </div>
+
+      <div class="settings-scroll">
+      <section class="settings-section">
+        <h3>Live updates</h3>
+        <label class="setting-toggle"><span><strong>Auto refresh</strong><small>Keep aircraft data up to date</small></span><input type="checkbox" id="autoRefresh" switch checked /></label>
+        <label class="setting-toggle"><span><strong>Smooth live movement</strong><small>Estimate motion between data updates</small></span><input type="checkbox" id="liveMotion" switch checked /></label>
+        <label class="setting-field" for="refreshSeconds"><span><strong>Refresh interval</strong><small>Public sources work best at 10 seconds or slower</small></span><select id="refreshSeconds"><option value="10">10 seconds</option><option value="20" selected>20 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option></select></label>
+      </section>
+
+      <section class="settings-section">
+        <h3>Selected aircraft</h3>
+        <label class="setting-toggle"><span><strong>Follow selected aircraft</strong><small>Keep it centered as it moves</small></span><input type="checkbox" id="followSelected" switch checked /></label>
+        <label class="setting-toggle"><span><strong>Observed trail</strong><small>Show positions recorded during this session</small></span><input type="checkbox" id="showObservedTrail" switch checked /></label>
+        <label class="setting-toggle"><span><strong>10-minute projection</strong><small>Dashed line based on current heading and speed</small></span><input type="checkbox" id="showProjected" switch checked /></label>
+      </section>
+
+      <section class="settings-section">
+        <h3>Map</h3>
+        <label class="setting-toggle"><span><strong>Aircraft labels</strong><small>Show callsigns beside map markers</small></span><input type="checkbox" id="showLabels" switch /></label>
+        <label class="setting-toggle"><span><strong>Coverage guide</strong><small>Show the area covered when zoomed far out</small></span><input type="checkbox" id="showCoverage" switch checked /></label>
+        <label class="setting-toggle"><span><strong>Haptic feedback</strong><small>Give supported phones a light tap when controls are pressed</small></span><input type="checkbox" id="hapticsEnabled" switch checked /></label>
+        <label class="setting-field" for="mapStyle"><span><strong>Map style</strong><small>Choose the background that is easiest to read</small></span><select id="mapStyle"><option value="dark">Dark radar</option><option value="street">Street map</option><option value="light">Light map</option></select></label>
+      </section>
+
+      <section class="settings-section advanced-settings">
+        <details>
+          <summary>Advanced data settings</summary>
+          <p>Automatic mode tries multiple public data sources. If browser CORS or rate limits block them, you can use your own OpenSky-compatible proxy.</p>
+          <label for="apiBase">Custom API base URL</label>
+          <input id="apiBase" type="url" inputmode="url" placeholder="https://your-worker.example.workers.dev" />
+          <div class="dialog-actions"><button id="clearApiBtn" class="secondary-button" type="button">Use automatic sources</button><button id="saveApiBtn" class="primary-button" type="button">Save data source</button></div>
+        </details>
+      </section>
+      </div>
+
+      <div class="dialog-footer">
+        <button id="resetPrefsBtn" class="text-button danger-text" type="button">Reset preferences</button>
+        <button class="primary-button" value="default">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <input id="hapticSwitch" class="haptic-switch" type="checkbox" switch tabindex="-1" aria-hidden="true" />
+
+  <script src="vendor/leaflet.js?v=1.9.4"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

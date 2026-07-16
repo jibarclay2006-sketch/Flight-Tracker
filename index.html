@@ -8,7 +8,7 @@
   <title>Flight Tracker — Live ADS-B Radar</title>
   <link rel="preconnect" href="https://basemaps.cartocdn.com" />
   <link rel="stylesheet" href="vendor/leaflet.css?v=1.9.4" />
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=11" />
 </head>
 <body>
   <div id="app">
@@ -123,6 +123,11 @@
               <small id="sourceMeta">Trying available public data sources</small>
             </div>
           </div>
+          <details id="feedDetails" class="feed-details">
+            <summary><span id="feedSummary">Checking live feeds</span></summary>
+            <div id="feedBreakdown" class="feed-breakdown"></div>
+            <p id="surfaceCoverageNote" class="surface-coverage-note" hidden></p>
+          </details>
           <button id="retryBtn" class="retry-button" type="button" hidden>Try again</button>
           <small class="disclaimer">Public ADS-B data may be delayed or incomplete. Not for navigation.</small>
         </footer>
@@ -209,7 +214,7 @@
       <section class="settings-section advanced-settings">
         <details>
           <summary>Advanced data settings</summary>
-          <p>Automatic mode tries multiple public data sources. If browser CORS or rate limits block them, you can use your own OpenSky-compatible proxy.</p>
+          <p>Automatic mode merges multiple public feeds. Some providers block direct browser requests, so the included multi-source Worker can unlock every community feed and OpenSky from GitHub Pages. A proxy cannot create airport coverage where no receiver heard the aircraft.</p>
           <label for="apiBase">Custom API base URL</label>
           <input id="apiBase" type="url" inputmode="url" placeholder="https://your-worker.example.workers.dev" />
           <div class="dialog-actions"><button id="clearApiBtn" class="secondary-button" type="button">Use automatic sources</button><button id="saveApiBtn" class="primary-button" type="button">Save data source</button></div>
@@ -228,6 +233,6 @@
   <input id="hapticSwitch" class="haptic-switch" type="checkbox" switch tabindex="-1" aria-hidden="true" />
 
   <script src="vendor/leaflet.js?v=1.9.4"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

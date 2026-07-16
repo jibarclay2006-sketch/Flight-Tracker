@@ -8,7 +8,7 @@
   <title>Flight Tracker — Live ADS-B Radar</title>
   <link rel="preconnect" href="https://basemaps.cartocdn.com" />
   <link rel="stylesheet" href="vendor/leaflet.css?v=1.9.4" />
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=12" />
 </head>
 <body>
   <div id="app">
@@ -215,6 +215,10 @@
         <details>
           <summary>Advanced data settings</summary>
           <p>Automatic mode merges multiple public feeds. Some providers block direct browser requests, so the included multi-source Worker can unlock every community feed and OpenSky from GitHub Pages. A proxy cannot create airport coverage where no receiver heard the aircraft.</p>
+          <div class="proxy-deploy-card">
+            <div><strong>Unlock browser-blocked feeds</strong><small>Deploy your own free proxy, then paste its workers.dev URL below.</small></div>
+            <a class="deploy-proxy-button" href="https://deploy.workers.cloudflare.com/?url=https://github.com/jibarclay2006-sketch/Flight-Tracker" target="_blank" rel="noopener">Deploy proxy</a>
+          </div>
           <label for="apiBase">Custom API base URL</label>
           <input id="apiBase" type="url" inputmode="url" placeholder="https://your-worker.example.workers.dev" />
           <div class="dialog-actions"><button id="clearApiBtn" class="secondary-button" type="button">Use automatic sources</button><button id="saveApiBtn" class="primary-button" type="button">Save data source</button></div>

@@ -1,6 +1,6 @@
 # Live Flight Tracker
 
-A polished, touch-friendly live aircraft radar that runs entirely in the browser. It combines Leaflet maps with public ADS-B data from Airplanes.live, ADSB.lol, and OpenSky, automatically falling back when a source is unavailable. Leaflet is vendored in the repository so a third-party script CDN cannot prevent the app from starting.
+A polished, touch-friendly live aircraft radar that runs in the browser. It combines and deduplicates public ADS-B data from Airplanes.live, ADSB.lol, ADSB.fi, and OpenSky instead of stopping after the first feed responds. Leaflet is vendored in the repository so a third-party script CDN cannot prevent the app from starting.
 
 ## What it can do
 
@@ -18,6 +18,7 @@ A polished, touch-friendly live aircraft radar that runs entirely in the browser
 - Share a selected flight through the system share sheet or clipboard.
 - Persist map position and interface preferences locally.
 - Explain rate limits, CORS failures, offline state, stale data, and wide-area coverage instead of failing silently.
+- Show per-feed health, unique merged counts, and an explicit surface-receiver coverage warning.
 
 ## iPhone and touch support
 
@@ -30,15 +31,18 @@ A polished, touch-friendly live aircraft radar that runs entirely in the browser
 
 ## Data behavior
 
-The tracker tries these sources in order based on the size of the current map view:
+The tracker checks these sources together and merges aircraft by ICAO hex:
 
 1. [Airplanes.live](https://airplanes.live/api-guide/) for nearby point/radius searches.
-2. [ADSB.lol](https://api.adsb.lol/) as the next public ADS-B source.
-3. [OpenSky](https://openskynetwork.github.io/opensky-api/rest.html) for bounding-box coverage and fallback data.
+2. [ADSB.lol](https://api.adsb.lol/) for another community receiver network.
+3. [ADSB.fi](https://opendata.adsb.fi/) for an additional community feed.
+4. [OpenSky](https://openskynetwork.github.io/opensky-api/rest.html) for bounding-box state vectors.
+
+Open **Feed details** below the aircraft list to see which providers responded, how many rows each reported, and whether surface coverage is thin.
 
 Point/radius APIs cover at most 250 nautical miles. When a national-scale view must fall back to one of them, the app draws and labels the actual coverage circle rather than implying that the whole screen was scanned. Zoom or pan to scan a different area.
 
-Public services can be delayed, incomplete, blocked by browser CORS rules, or rate-limited. This project is for education and visualization only and is not for navigation.
+Public services can be delayed, incomplete, blocked by browser CORS rules, or rate-limited. Ground transponders are especially easy to miss because low-altitude surface signals require receivers close to the airport. A successful request does not guarantee complete airport coverage. This project is for education and visualization only and is not for navigation.
 
 ## Run locally
 
@@ -60,16 +64,24 @@ The site will be available at:
 
 `https://jibarclay2006-sketch.github.io/Flight-Tracker/`
 
-## Optional CORS proxy
+## Optional multi-source proxy
 
-If every automatic source is blocked in the browser, deploy `cloudflare-worker.js` as a Cloudflare Worker. In the tracker, open **Settings -> Advanced data settings** and paste the Worker's base URL.
+Some public providers do not permit direct cross-origin browser requests. To make every configured source available from GitHub Pages, deploy `cloudflare-worker.js` as a Cloudflare Worker. In the tracker, open **Settings -> Advanced data settings** and paste the Worker's base URL.
+
+In the Cloudflare dashboard:
+
+1. Open **Workers & Pages**, create a Worker, and replace its starter code with `cloudflare-worker.js`.
+2. Deploy it and copy the resulting `https://...workers.dev` URL.
+3. Paste that URL into the tracker's **Custom API base URL** field and save.
 
 The included Worker:
 
-- proxies only the allowed OpenSky state and track endpoints;
+- proxies only validated Airplanes.live, ADSB.lol, ADSB.fi, and OpenSky paths;
 - handles browser CORS preflight requests;
 - rejects non-GET methods and unknown paths;
-- returns a useful `502` response if OpenSky is unreachable.
+- times out slow upstreams and returns a useful `502` response when a provider is unreachable.
+
+The proxy fixes browser access and lets the app merge all configured feeds; it cannot add ground aircraft that none of those receiver networks captured. For near-complete airport surface traffic, connect a licensed commercial provider or a well-placed local receiver through a compatible private proxy.
 
 Do not place private API credentials in this repository or in the browser settings field.
 

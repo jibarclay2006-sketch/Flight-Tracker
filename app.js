@@ -68,6 +68,7 @@ const state = {
   lastFetchStarted: 0,
   lastSuccess: 0,
   lastSource: "",
+  lastSourceSummary: "",
   lastQueryContext: null,
   lastSourceCoverage: "",
   lastFollowPan: 0,
@@ -111,6 +112,10 @@ const els = {
   clearSelectionBtn: document.getElementById("clearSelectionBtn"),
   status: document.getElementById("status"),
   sourceMeta: document.getElementById("sourceMeta"),
+  feedDetails: document.getElementById("feedDetails"),
+  feedSummary: document.getElementById("feedSummary"),
+  feedBreakdown: document.getElementById("feedBreakdown"),
+  surfaceCoverageNote: document.getElementById("surfaceCoverageNote"),
   statusCard: document.querySelector(".status-card"),
   dataHealth: document.getElementById("dataHealth"),
   dataHealthLabel: document.getElementById("dataHealthLabel"),
@@ -429,43 +434,50 @@ async function fetchVisibleAircraft({ force = false } = {}) {
   state.fetchController = new AbortController();
   const context = getQueryContext();
   const candidates = buildSourceCandidates(context);
-  const errors = [];
 
   els.refreshBtn.classList.add("refreshing");
-  setStatus("Scanning this airspace…", "loading", "Trying available live data sources");
+  setStatus("Scanning this airspace…", "loading", `Checking ${candidates.length} live data feeds`);
+  setFeedLoading(candidates);
   clearMapMessage();
 
   try {
-    for (const source of candidates) {
+    const results = await Promise.all(candidates.map(async source => {
       try {
         const data = await fetchJson(source.url, state.fetchController.signal);
-        if (requestId !== state.requestId) return;
         const rows = source.parse(data);
         if (!Array.isArray(rows)) throw new Error("unexpected response format");
-        rows.forEach(aircraft => { aircraft.source = source.label; });
-        updateAircraft(rows);
-        state.lastSuccess = Date.now();
-        state.lastSource = source.label;
-        state.lastQueryContext = context;
-        state.lastSourceCoverage = source.coverage;
-        updateCoverageGuide();
-        setStatus(
-          `${rows.length.toLocaleString()} aircraft received`,
-          "live",
-          `${source.label} · updated just now`
-        );
-        followSelectedPlane(false);
-        return;
+        return { ok: true, source, rows };
       } catch (error) {
-        if (state.fetchController.signal.aborted || requestId !== state.requestId) return;
-        errors.push({ source: source.label, error });
         console.warn(`${source.label} failed`, error);
+        return { ok: false, source, error };
       }
+    }));
+
+    if (state.fetchController.signal.aborted || requestId !== state.requestId) return;
+    const successful = results.filter(result => result.ok);
+    if (successful.length) {
+      const rows = mergeSourceRows(successful);
+      const groundCount = rows.filter(aircraft => aircraft.onGround).length;
+      updateAircraft(rows);
+      state.lastSuccess = Date.now();
+      state.lastSource = successful.map(result => result.source.label).join(" + ");
+      state.lastSourceSummary = `${successful.length} of ${candidates.length} feeds · ${rows.length.toLocaleString()} unique`;
+      state.lastQueryContext = context;
+      state.lastSourceCoverage = successful.some(result => result.source.coverage === "bounds") ? "bounds" : "radius";
+      updateCoverageGuide();
+      renderFeedDetails(results, rows);
+      setStatus(
+        `${rows.length.toLocaleString()} unique aircraft received`,
+        "live",
+        `${state.lastSourceSummary} · ${groundCount.toLocaleString()} ground · updated just now`
+      );
+      followSelectedPlane(false);
+      return;
     }
 
-    if (requestId !== state.requestId) return;
-    const reason = summarizeFetchErrors(errors);
-    setStatus("Live flight data is temporarily unavailable", "error", reason);
+    const errors = results.map(result => ({ source: result.source.label, error: result.error }));
+    renderFeedDetails(results, []);
+    setStatus("Live flight data is temporarily unavailable", "error", summarizeFetchErrors(errors));
     setMapMessage("Couldn’t update live traffic. Existing positions are still shown.");
     renderAll();
   } finally {
@@ -509,19 +521,49 @@ function buildSourceCandidates(context) {
 
   if (state.apiBase) {
     const base = state.apiBase;
-    const customBounds = {
-      label: "Custom OpenSky proxy",
-      url: `${base}${openSkyPath}`,
-      parse: parseOpenSkyResponse,
-      coverage: "bounds"
-    };
-    const customPoint = {
-      label: "Custom ADS-B proxy",
-      url: `${base}/v2/point/${lat}/${lon}/${context.radiusNm}`,
-      parse: parseReadsbResponse,
-      coverage: "radius"
-    };
-    return context.bboxUsable ? [customBounds, customPoint] : [customPoint];
+    const customSources = [
+      {
+        label: "Airplanes.live via proxy",
+        url: `${base}/airplanes/v2/point/${lat}/${lon}/${context.radiusNm}`,
+        parse: parseReadsbResponse,
+        coverage: "radius"
+      },
+      {
+        label: "ADSB.lol via proxy",
+        url: `${base}/adsblol/v2/lat/${lat}/lon/${lon}/dist/${context.radiusNm}`,
+        parse: parseReadsbResponse,
+        coverage: "radius"
+      },
+      {
+        label: "ADSB.fi via proxy",
+        url: `${base}/adsbfi/api/v2/lat/${lat}/lon/${lon}/dist/${context.radiusNm}`,
+        parse: parseReadsbResponse,
+        coverage: "radius"
+      },
+      {
+        label: "Custom ADS-B proxy (legacy)",
+        url: `${base}/v2/point/${lat}/${lon}/${context.radiusNm}`,
+        parse: parseReadsbResponse,
+        coverage: "radius"
+      }
+    ];
+    if (context.bboxUsable && !context.huge) {
+      customSources.push(
+        {
+          label: "OpenSky via proxy",
+          url: `${base}/opensky${openSkyPath}`,
+          parse: parseOpenSkyResponse,
+          coverage: "bounds"
+        },
+        {
+          label: "Custom OpenSky proxy (legacy)",
+          url: `${base}${openSkyPath}`,
+          parse: parseOpenSkyResponse,
+          coverage: "bounds"
+        }
+      );
+    }
+    return customSources;
   }
 
   const pointSources = [
@@ -536,6 +578,12 @@ function buildSourceCandidates(context) {
       url: `https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${context.radiusNm}`,
       parse: parseReadsbResponse,
       coverage: "radius"
+    },
+    {
+      label: "ADSB.fi",
+      url: `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${context.radiusNm}`,
+      parse: parseReadsbResponse,
+      coverage: "radius"
     }
   ];
   const openSky = {
@@ -548,6 +596,38 @@ function buildSourceCandidates(context) {
   if (context.broad && !context.huge && context.bboxUsable) return [openSky, ...pointSources];
   if (context.huge || !context.bboxUsable) return pointSources;
   return [...pointSources, openSky];
+}
+
+function mergeSourceRows(successfulResults) {
+  const byIcao = new Map();
+  const liveFields = [
+    "lat", "lon", "baroAltitude", "geoAltitude", "onGround", "velocity",
+    "track", "verticalRate", "squawk", "emergency", "lastContact"
+  ];
+
+  for (const result of successfulResults) {
+    for (const row of result.rows) {
+      const existing = byIcao.get(row.icao24);
+      if (!existing) {
+        byIcao.set(row.icao24, { ...row, source: result.source.label, sources: [result.source.label] });
+        continue;
+      }
+
+      const incomingIsNewer = (row.lastContact ?? 0) >= (existing.lastContact ?? 0);
+      for (const [key, value] of Object.entries(row)) {
+        if (value == null || value === "") continue;
+        if (liveFields.includes(key)) {
+          if (incomingIsNewer || existing[key] == null) existing[key] = value;
+        } else if (existing[key] == null || existing[key] === "") {
+          existing[key] = value;
+        }
+      }
+      existing.sources.push(result.source.label);
+      existing.source = existing.sources.join(" + ");
+    }
+  }
+
+  return [...byIcao.values()];
 }
 
 async function fetchJson(url, parentSignal) {
@@ -1253,11 +1333,46 @@ function setStatus(message, type = "loading", detail = "") {
   els.retryBtn.hidden = type !== "error";
 }
 
+function setFeedLoading(candidates) {
+  els.feedSummary.textContent = `Checking ${candidates.length} feeds`;
+  els.feedBreakdown.innerHTML = candidates.map(source => `
+    <div class="feed-row is-loading"><span>${escapeHtml(source.label)}</span><strong>Checking…</strong></div>
+  `).join("");
+  els.surfaceCoverageNote.hidden = true;
+}
+
+function renderFeedDetails(results, rows) {
+  const successful = results.filter(result => result.ok);
+  const groundCount = rows.filter(aircraft => aircraft.onGround).length;
+  els.feedSummary.textContent = `${successful.length} of ${results.length} feeds responded`;
+  els.feedBreakdown.innerHTML = results.map(result => {
+    const detail = result.ok
+      ? `${result.rows.length.toLocaleString()} reported`
+      : describeSourceError(result.error);
+    return `<div class="feed-row${result.ok ? "" : " is-error"}"><span>${escapeHtml(result.source.label)}</span><strong>${escapeHtml(detail)}</strong></div>`;
+  }).join("");
+  els.surfaceCoverageNote.hidden = false;
+  els.surfaceCoverageNote.textContent = groundCount
+    ? `${groundCount.toLocaleString()} ground aircraft were heard. Surface coverage can still be incomplete.`
+    : "No ground aircraft were heard. Surface signals need nearby community receivers and are often missing around airports.";
+  els.feedDetails.dataset.surface = groundCount ? "partial" : "limited";
+  els.sourceMeta.title = results.map(result => `${result.source.label}: ${result.ok ? `${result.rows.length} reported` : describeSourceError(result.error)}`).join("\n");
+}
+
+function describeSourceError(error) {
+  if (error?.status === 429) return "Rate limited";
+  if ([401, 403].includes(error?.status)) return "Access blocked";
+  if (error?.status >= 500) return "Service unavailable";
+  if (error?.message === "request timed out") return "Timed out";
+  if (error?.name === "TypeError" || /fetch|cors|network/i.test(error?.message || "")) return "Browser blocked";
+  return "Unavailable";
+}
+
 function updateTimeLabels() {
   if (!state.lastSuccess || !state.lastSource) return;
   const seconds = Math.max(0, Math.floor((Date.now() - state.lastSuccess) / 1000));
   const age = seconds < 5 ? "updated just now" : seconds < 60 ? `updated ${seconds}s ago` : `updated ${Math.floor(seconds / 60)}m ago`;
-  if (els.statusCard.dataset.state === "live") els.sourceMeta.textContent = `${state.lastSource} · ${age}`;
+  if (els.statusCard.dataset.state === "live") els.sourceMeta.textContent = `${state.lastSourceSummary} · ${age}`;
 }
 
 function setMapMessage(message) {

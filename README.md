@@ -68,6 +68,10 @@ The site will be available at:
 
 Some public providers do not permit direct cross-origin browser requests. To make every configured source available from GitHub Pages, deploy `cloudflare-worker.js` as a Cloudflare Worker. In the tracker, open **Settings -> Advanced data settings** and paste the Worker's base URL.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jibarclay2006-sketch/Flight-Tracker)
+
+The button uses the repository's `wrangler.jsonc` configuration to create the proxy in your own Cloudflare account. After deployment, copy the provided `https://...workers.dev` address, paste it into **Custom API base URL**, and save.
+
 In the Cloudflare dashboard:
 
 1. Open **Workers & Pages**, create a Worker, and replace its starter code with `cloudflare-worker.js`.
